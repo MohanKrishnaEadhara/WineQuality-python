@@ -9,8 +9,6 @@ import os
 
 os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.hadoop:hadoop-aws:3.2.0 pyspark-shell'
 
-# Clean the column names
-
 
 def clean_column_name(col_name):
     return col_name.replace('"', '').strip()
@@ -20,18 +18,18 @@ def main():
     conf = SparkConf().setAppName("WineQualityTraining")
     spark = SparkSession.builder \
         .appName("WineQualityTraining") \
+        .config("spark.hadoop.version", "3.2.0") \
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.DefaultAWSCredentialsProviderChain") \
         .getOrCreate()
 
     try:
-        # Load the training and validation datasets with semicolon delimiter
+        print("Loading datasets...")
         trainingData = spark.read.format("csv") \
             .option("header", "true") \
             .option("delimiter", ";") \
             .option("inferSchema", "true") \
             .load("s3a://wine-quality-dataset-bucket/TrainingDataset.csv")
-
         validationData = spark.read.format("csv") \
             .option("header", "true") \
             .option("delimiter", ";") \
@@ -43,53 +41,35 @@ def main():
         validationData = validationData.toDF(
             *(clean_column_name(c) for c in validationData.columns))
 
-        # Prepare the feature columns
-        featureColumns = [
-            "fixed acidity", "volatile acidity", "citric acid", "residual sugar",
-            "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
-            "pH", "sulphates", "alcohol"
-        ]
-
+        print("Assembling features...")
+        featureColumns = ["fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                          "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                          "pH", "sulphates", "alcohol"]
         assembler = VectorAssembler(
             inputCols=featureColumns, outputCol="features")
-
-        # String indexer for the label column
         indexer = StringIndexer(inputCol="quality", outputCol="label")
-
-        # Logistic Regression model
         lr = LogisticRegression(maxIter=10, regParam=0.3, elasticNetParam=0.8,
                                 family="multinomial", labelCol="label", featuresCol="features")
 
         pipeline = Pipeline(stages=[assembler, indexer, lr])
+        print("Training model...")
         model = pipeline.fit(trainingData)
 
-        # Make predictions on the validation dataset
+        print("Evaluating model...")
         predictions = model.transform(validationData)
-
-        evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction",
-                                                      metricName="accuracy")
+        evaluator = MulticlassClassificationEvaluator(
+            labelCol="label", predictionCol="prediction", metricName="accuracy")
         accuracy = evaluator.evaluate(predictions)
         print("Accuracy =", accuracy)
 
-        # Metrics
-        print("Confusion matrix:")
-        predictions.groupBy("label", "prediction").count().show()
-
-        metrics = ["f1", "weightedPrecision", "weightedRecall"]
-        for metric in metrics:
-            evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction",
-                                                          metricName=metric)
-            result = evaluator.evaluate(predictions)
-            print(f"{metric} = {result}")
-
-        # Save the model
+        print("Saving model...")
         model.write().overwrite().save("s3a://wine-quality-dataset-bucket/WineQualityModel")
+        print("Model saved successfully.")
 
     except Exception as e:
         print("An error occurred:", str(e))
 
     finally:
-        # Clean up
         spark.stop()
 
 
