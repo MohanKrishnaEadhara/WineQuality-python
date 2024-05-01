@@ -4,7 +4,11 @@ from pyspark.ml import PipelineModel
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 import os
 
-os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.hadoop:hadoop-aws:3.2.0 pyspark-shell'
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages org.apache.hadoop:hadoop-aws:3.2.2 pyspark-shell'
+
+
+def clean_column_name(col_name):
+    return col_name.replace('"', '').strip()
 
 
 def main():
@@ -20,11 +24,16 @@ def main():
         model = PipelineModel.load(
             "s3a://wine-quality-dataset-bucket/WineQualityModel")
 
-        # Load the test dataset
+        # Load the test dataset with the correct delimiter
         testData = spark.read.format("csv") \
             .option("header", "true") \
+            .option("delimiter", ";") \
             .option("inferSchema", "true") \
             .load("s3a://wine-quality-dataset-bucket/TestDataset.csv")
+
+        # Clean up column names
+        testData = testData.toDF(*(clean_column_name(c)
+                                 for c in testData.columns))
 
         if testData.rdd.isEmpty():
             raise ValueError(
